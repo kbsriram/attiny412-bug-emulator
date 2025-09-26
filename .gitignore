@@ -1,0 +1,6 @@
+*~
+*.lst
+*.elf
+*.hex
+*.o
+test/*_test

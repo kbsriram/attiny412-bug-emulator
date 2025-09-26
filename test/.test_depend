@@ -1,0 +1,3 @@
+fake_hal.o: fake_hal.c ../src/hal.h
+bug.o: ../src/bug.c ../src/bug.h ../src/hal.h
+bug_test.o: bug_test.c ../src/bug.h ../src/hal.h
