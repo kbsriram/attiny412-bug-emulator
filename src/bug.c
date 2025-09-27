@@ -1,5 +1,6 @@
 #include "bug.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "hal.h"
@@ -53,7 +54,7 @@
 // stops. We set it to move the full distance in about a quarter phase
 // at top speed. This is roughly 16 ticks. Since the total distance
 // is 2^14, the distance per tick is set to 2^10
-#define PADDLE_DELTA_V (1 << 10)
+#define PADDLE_DELTA_V (1 << 11)
 
 // The spring constant, and is also the parameter varied to change dit
 // speed.
@@ -70,7 +71,7 @@ void bug_init(void) {
   dit_velocity = 0;
 }
 
-void bug_tick(void) {
+bool bug_tick(void) {
   bool dit_pressed = hal_dit_pressed();
   if (dit_pressed) {
     if (dit_center < CENTER_DIT) {
@@ -90,7 +91,6 @@ void bug_tick(void) {
     }
   }
 
-  // F = -spring_k * displacement
   //   = -spring_k * (position - center)
   int16_t f = Q15_MULT(-spring_k, (dit_position - dit_center));
 
@@ -106,4 +106,11 @@ void bug_tick(void) {
   // dx = v * dt
   // dx = v
   dit_position = (int16_t)(dit_velocity + dit_position);
+
+  // damp beyond neutral position.
+  if (dit_position < CENTER_NEUTRAL) {
+    dit_position = CENTER_NEUTRAL;
+  }
+
+  return (dit_position >= CENTER_DIT);
 }
