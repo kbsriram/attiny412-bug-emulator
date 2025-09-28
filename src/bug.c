@@ -58,14 +58,14 @@
 
 // The spring constant, and is also the parameter varied to change dit
 // speed.
-int16_t spring_k = 44;
+int16_t spring_k = 32;
 
 int16_t dit_position = CENTER_NEUTRAL;
 int16_t dit_center = CENTER_NEUTRAL;
 int16_t dit_velocity = 0;
 
 void bug_init(void) {
-  spring_k = 44;
+  spring_k = 32;
   dit_position = CENTER_NEUTRAL;
   dit_center = CENTER_NEUTRAL;
   dit_velocity = 0;
