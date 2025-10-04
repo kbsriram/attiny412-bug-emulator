@@ -14,58 +14,80 @@
 // computed using the current distance of the dit contact from the
 // current center. This is used to update the velocity and position.
 //
-// Q15 fixed point arithmetic is used for all calculations, as I felt
-// was a reasonable balance between the simulation resolution and the
-// ALU capabilities on the tinyAVR.
+// The clock ticks every 1/1024 seconds, so these values are updated
+// with a delta t of 1/1024 seconds.
 //
-// A Q15 number x is an int16_t type that stands for an actual
-// floating point value of x / 2^15
+// We would also like to accomodate speeds from about 5wpm to 60 wpm.
+// The dit duration for a given wpm is 1.2/wpm seconds, so the
+// corresponding period for the underlying oscillation is twice that
+// or 2.4/wpm.
 //
-// So it can represent rational values from -32768/32768 ->
-// 32767/32768 - roughly -1 -> 1
+// The desired frequency of the dit paddle for a given wpm then would just
+// be its inverse, wpm/2.4
 //
-// Q15 numbers can be multiplied in integer arithmetic.
+// But this is also 1/(2*pi)sqrt(k/m) where k is the spring constant
+// and m is the mass. To simplify further calculations, we will assume
+// m = 1
 //
-// If S = 2^15, a Q15 number x represents an actual value of x / S
+// re-arranging the terms, we get the desired spring constant for a
+// given wpm as
+// k = (2*pi*wpm)^2/2.4^2
 //
-// Given a pair of Q15 numbers x and y
+// for a range of 5 to 60 wpm, k will range from about 171 to 24,674 which
+// fits conveniently in an int16_t
 //
-// (x / S) * (y / S)
-//     = (x * y / S) / S
-//     = ((x * y) >> 15) / S
+// We select other parameters to use as much of the int16_t range as
+// feasible, with some buffer to avoid overflow from rounding errors.
 //
-// which is just the Q17 number (x * y) >> 15 which we
-// can do just in integer arithmetic.
+// The maximum velocity is amplitude * sqrt(k), and choosing an amplitude
+// of 100, the maximum velocity across our desired wpm will range from
+// about 1300 to 15700
 //
-// The only caveat is that x * y calculation needs to be performed in
-// the int32_t domain before right shifting back to int16_t
+// If we limit our position values from +/- 256, we can use Q8.8
+// fixed-point values for positions (i.e., a given position value p
+// will represent an actual value of p / 2^8)
+//
+// So at each tick, the following calculations will update the current
+// position and velocity values.
+//
+// Force = -spring_k * displacement from center
+// f = k * displacement / 2^8 = (-k * displacement) >> 8
+// force = mass * acceleration, mass == 1 so
+// a = f
+// change in velocity dv = acceleration * change in time
+// dv = a * 1 / 1024 = a >> 10
+// velocity += (a >> 10)
+// change in position dx = velocity * change in time.
+// keeping in mind that we're scaling up position values by 2^8
+// dx = v * dt * 2^8
+//    = v * 1 / 1024 * 2^8
+//    = v * 1 / 4 = v >> 2
+// position += (v >> 2)
 
-#define Q15_MULT(x, y) ((int16_t)((((int32_t)(x)) * (y)) >> 15))
+#define INT_TO_Q8_8(x) ((x) << 8)
 
 // The center of oscillation at the neutral position, set
-// to -0.5
-#define CENTER_NEUTRAL (-(1 << 14))
+// to -100
+#define CENTER_NEUTRAL INT_TO_Q8_8(-100)
 
 // The center of oscillation when the paddle is at the dit stop
-// location.
+// location. This allows it to oscillate from -100 to 100
 #define CENTER_DIT 0
-
-// How quickly the paddle is moved transitioning between the dit
-// stops. We set it to move the full distance in about a quarter phase
-// at top speed. This is roughly 16 ticks. Since the total distance
-// is 2^14, the distance per tick is set to 2^10
-#define PADDLE_DELTA_V (1 << 11)
 
 // The spring constant, and is also the parameter varied to change dit
 // speed.
-int16_t spring_k = 32;
+// k = (2*pi*wpm)^2/2.4^2 ~= 6.85 * wpm^2
+
+// 5wpm    60wpm
+// 171     24674
+int16_t spring_k = 2740;
 
 int16_t dit_position = CENTER_NEUTRAL;
 int16_t dit_center = CENTER_NEUTRAL;
 int16_t dit_velocity = 0;
 
 void bug_init(void) {
-  spring_k = 32;
+  spring_k = 2740;
   dit_position = CENTER_NEUTRAL;
   dit_center = CENTER_NEUTRAL;
   dit_velocity = 0;
@@ -74,42 +96,25 @@ void bug_init(void) {
 bool bug_tick(void) {
   bool dit_pressed = hal_dit_pressed();
   if (dit_pressed) {
-    if (dit_center < CENTER_DIT) {
-      // move towards CENTER_DIT
-      dit_center += PADDLE_DELTA_V;
-      if (dit_center > CENTER_DIT) {
-        dit_center = CENTER_DIT;
-      }
+    if (dit_center != CENTER_DIT) {
+      dit_center = CENTER_DIT;
     }
   } else {
-    if (dit_center > CENTER_NEUTRAL) {
-      // move towards CENTER_NEUTRAL
-      dit_center -= PADDLE_DELTA_V;
-      if (dit_center < CENTER_NEUTRAL) {
-        dit_center = CENTER_NEUTRAL;
-      }
+    if (dit_center != CENTER_NEUTRAL) {
+      dit_center = CENTER_NEUTRAL;
     }
   }
 
-  //   = -spring_k * (position - center)
-  int16_t f = Q15_MULT(-spring_k, (dit_position - dit_center));
-
-  // F = m * a
-  // We fix m = 1, so a = F
-
-  // dv = a * dt
-  //    = f * dt
-  // we fix dt = 1, so
-  // dv = f
-  dit_velocity += f;
-
-  // dx = v * dt
-  // dx = v
-  dit_position = (int16_t)(dit_velocity + dit_position);
+  int32_t displacement = (int32_t)dit_position - (int32_t)dit_center;
+  int32_t f = ((int32_t)spring_k * displacement) >> 8;
+  int32_t a = f;
+  dit_velocity -= (int16_t)(a >> 10);
+  dit_position += (dit_velocity >> 2);
 
   // damp beyond neutral position.
   if (dit_position < CENTER_NEUTRAL) {
     dit_position = CENTER_NEUTRAL;
+    dit_velocity = 0;
   }
 
   return (dit_position >= CENTER_DIT);
